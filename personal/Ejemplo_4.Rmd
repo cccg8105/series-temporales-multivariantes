@@ -1,0 +1,202 @@
+---
+title: "Datos de oro y plata"
+output: html_notebook
+author: "César Cárdenas"
+date: "29/3/2021"
+---
+
+### Librerias
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# install.packages("vars")
+# install.packages("MTS")
+# install.packages("tseries")
+# install.packages("ggfortify")
+library(readr)
+library(tseries)
+library(ggplot2)
+library(ggfortify)
+library(dplyr)
+library(vars)
+library(MTS) # diffM
+
+# Plot avanzado con separación visual entre lo real y lo pronosticado
+library(lattice)
+library(grid)
+library(zoo)
+```
+
+### Importación de datos
+
+```{r}
+dat = read_csv('https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/2.%20Casos%20de%20estudio%20en%20R/D.%20Comodities%20Oro%20y%20Plata/comodity_price.csv')
+
+head(dat)
+```
+
+Creación de la serie de tiempo
+
+```{r}
+# Crear las series de tipo ts
+gold <- ts(log(dat$gold),start=c(1993,11),frequency=12)
+silver <- ts(log(dat$silver),start=c(1993,11),frequency=12)
+plat <- ts(log(dat$plat),start=c(1993,11),frequency=12)
+pall <- ts(log(dat$pall),start=c(1993,11),frequency=12)
+
+# Plot Gold y Silver
+par(mfrow=c(1,1))
+plot.ts(cbind(gold,silver), plot.type="single", ylab="",col = 4:3)
+legend("topleft",legend=c("gold","silver"),col=4:3,lty=1,bty='n')
+
+# Una sola serie con las dos
+data <- ts.union(gold,silver)
+```
+
+### Prueba de estacionariedad
+
+```{r}
+# Prueba estacionariedad
+apply(data, 2, adf.test) #2 para especificar que lo queremos aplicar por columnas
+
+```
+
+Como no son estacionarias hay que aplicar una diferenciacion 
+
+```{r}
+# Diferenciamos
+library(MTS)
+stnry = diffM(data)
+
+# Volviendo a hacer el test:
+apply(stnry, 2, adf.test)
+```
+
+Ya son estacionarias
+
+```{r}
+plot.ts(stnry)
+
+
+```
+
+### Modelo
+
+```{r}
+VARselect(stnry, type = "none", lag.max = 10)
+
+# Creando el modelo
+var.a <- vars::VAR(stnry,
+                   lag.max = 10,
+                   ic = "AIC",
+                   type = "none")
+summary(var.a)
+```
+
+Diagnosis
+
+```{r}
+## Diagnosis del modelo (Portmanteau test para objetos var)
+bv.serial=serial.test(var.a)
+bv.serial
+plot(bv.serial, names = "gold")
+plot(bv.serial, names = "silver")
+
+```
+
+### Prediccion
+
+```{r}
+fcast = predict(var.a, n.ahead = 30)
+plot(fcast)
+
+######### Forecast solo para gold
+gold = fcast$fcst[1]; gold 
+
+# Extrayendo la columna de pronósticos
+x = gold$gold[,1]; x
+
+# Invirtiendo la diferenciación
+tail(data)
+
+x = cumsum(x) + data[nrow(data), 1]
+
+plot.ts(x)
+```
+
+Agregando los datos reales a la prediccion
+
+```{r}
+goldinv =ts(c(data[,1], x),
+           start = c(1993,11), frequency = 12)
+
+
+# Dibujando todo 
+plot(goldinv)
+plot.ts(goldinv[200:261])
+```
+
+```{r}
+xx = zoo(goldinv[200:261])
+
+# En el parámetro grid.clip ponemos la cantidad de observaciones que son reales dentro de las 
+# que hemos elegido. Hemos cogido 62 de las que 30 son pronósticos, así que grid.clip sería 32-1
+
+xyplot(xx, grid=TRUE, panel = function(xx, y, ...){
+  
+  panel.xyplot(xx, y, col="red", ...)
+  
+  grid.clip(unit(31, "native"), just=c("right")) 
+  
+  panel.xyplot(xx, y, col="green", ...) })
+
+```
+
+Prediccion de la variable Silver
+
+```{r}
+######### Forecast silver
+fcast = predict(var.a, n.ahead = 30)
+
+# Solo para silver 
+silver = fcast$fcst[2]; silver 
+
+# Extrayendo la columna de pronósticos
+y = silver$silver[,1]; y
+
+# Invirtiendo la diferenciación
+tail(data)
+
+y = cumsum(y) + data[nrow(data), 2]
+
+plot.ts(y)
+
+# Combinando los datos reales y la predicción en una sola serie de tiempo
+silverinv =ts(c(data[,2], y),
+            start = c(1993,11), frequency = 12)
+
+# Dibujando todo 
+plot(silverinv)
+plot.ts(silverinv[200:261])
+
+```
+
+```{r}
+xx = zoo(silverinv[200:261])
+
+
+# En el parámetro grid.clip ponemos la cantidad de observaciones que son reales dentro de las 
+# que hemos elegido. Hemos cogido 62 de las que 30 son pronósticos, así que grid.clip sería 32-1
+
+xyplot(xx, grid=TRUE, panel = function(xx, y, ...){
+  
+  panel.xyplot(xx, y, col="red", ...)
+  
+  grid.clip(unit(31, "native"), just=c("right")) 
+  
+  panel.xyplot(xx, y, col="green", ...) })
+
+# Como vemos si nos vamos demasiado lejos en el futuro se aplana la predicción (este modelo tiene lag de orden 1 solamente
+# es un VAR(1) por lo cual no puede pronosticar 30 meses a futuro.
+
+```
+

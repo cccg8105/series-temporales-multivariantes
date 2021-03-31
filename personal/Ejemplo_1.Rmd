@@ -1,0 +1,214 @@
+---
+title: "Datos macroeconómicos de Estados Unidos"
+output: html_notebook
+author: "César Cárdenas"
+date: "27/3/2021"
+---
+
+### Librerias
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# install.packages("vars")
+# install.packages("MTS")
+# install.packages("tseries")
+# install.packages("ggfortify")
+library(readr)
+library(tseries)
+library(ggplot2)
+library(ggfortify)
+library(dplyr)
+library(vars)
+```
+
+### Importación de datos
+
+```{r}
+dat = read_csv("https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/2.%20Casos%20de%20estudio%20en%20R/A.%20Datos%20macroecon%C3%B3micos%20de%20USA/blanchQua.csv")
+
+head(dat)
+
+```
+
+
+```{r}
+# Convertir a objeto ts las dos series
+gdp <- ts(dat$GDP, start = c(1948, 2), freq = 4) # trimestral (cuantos periodos hay en un año)
+une <- ts(dat$U, start = c(1948, 2), freq = 4) 
+
+# Gráfico con plot:
+dat.bv <- cbind(gdp, une)
+
+plot(dat.bv)
+autoplot(dat.bv )
+```
+
+### Dividir en entrenamiento y prueba
+
+```{r}
+n_obs=10 # se pronostican 10 trimestres en el futuro
+end=dim(dat.bv)[1]
+X_train = dat.bv[1:(end-n_obs),]
+X_test = dat.bv[(end-n_obs+1):end,]
+dim(X_test)
+```
+
+### Prueba de estacionariedad
+
+```{r}
+apply(X_train, 2, adf.test) #2 para especificar que lo queremos aplicar por columnas
+
+```
+Ambos resultados de la prueba salen menores que 0.05, por lo tanto se rechaza la hipotesis nula ($H_{0}$ -> la serie no es estacionaria) y la serie es estacionaria. 
+
+### Modelo VAR
+
+```{r}
+VARselect(X_train, type = "none", lag.max = 10) # selecciona el mejor modelo hasta el orden 10
+
+
+# Creando el modelo
+var.a <- vars::VAR(X_train,
+                   lag.max = 10,
+                   ic = "AIC",
+                   type = "const")
+
+summary(var.a)
+```
+
+### Causalidad de Granger
+
+```{r}
+causality(var.a, cause = c("gdp"))
+causality(var.a, cause = c("une"))
+
+```
+
+Se rechaza la hipotesis nula que las variables no están relacionadas. Por lo tanto ambas están relacionadas.
+
+### Diagnosis del modelo 
+
+Analisis de residuos.Debe comportarse como ruido blanco
+
+```{r}
+bv.serial= serial.test(var.a)
+bv.serial
+
+# Deseamos obtener un p-valor > 0.05, en este caso lo obtenemos.
+# Posibles soluciones si es < 0.05:
+# a) Cambiar el orden del modelo.
+# b) Cambiar el tipo de modelo.
+# c) Añadir otro paso de diferenciación o transformar con logaritmos.
+
+plot(bv.serial, names = "gdp")
+plot(bv.serial, names = "une")
+
+```
+
+### Predicciones
+
+```{r}
+predictions <- predict(var.a, n.ahead = 10, ci = 0.95)
+plot(predictions, names = "gdp")
+
+predictions <- predict(var.a, n.ahead = 10, ci = 0.95)
+plot(predictions, names = "une")
+
+```
+
+```{r}
+# Otro gráfico 
+fanchart(predictions, names = "gdp")
+fanchart(predictions, names = "une")
+
+```
+
+### Evaluación del modelo
+
+```{r}
+#### Evaluando el modelo
+pred=predictions$fcst
+rmse=sqrt(mean((X_test[,1]-pred$gdp)^2))
+cat('RMSE gdp: ', rmse)
+rmse=sqrt(mean((X_test[,2]-pred$une)^2))
+cat('RMSE une: ', rmse)
+
+```
+
+### Entrenar modelo con todos los datos
+
+```{r}
+# Identificación del orden del modelo
+VARselect(dat.bv, type = "none", lag.max = 10)
+
+# Creando el modelo
+var.a <- vars::VAR(dat.bv,
+                   lag.max = 10,
+                   ic = "AIC",
+                   type = "const")
+
+summary(var.a)
+```
+
+### Causalidad de Granger
+
+```{r}
+causality(var.a, cause = c("gdp"))
+causality(var.a, cause = c("une"))
+```
+
+### Diagnosis del modelo
+
+```{r}
+bv.serial= serial.test(var.a)
+bv.serial
+
+# Deseamos obtener un p-valor > 0.05, en este caso lo obtenemos.
+# Posibles soluciones si es < 0.05:
+# a) Cambiar el orden del modelo.
+# b) Cambiar el tipo de modelo.
+# c) Añadir otro paso de diferenciación o transformar con logaritmos.
+
+plot(bv.serial, names = "gdp")
+plot(bv.serial, names = "une")
+```
+
+### Predicciones
+
+```{r}
+####### Forecasting usando el modelo VAR (Hallando los pronósticos)
+predictions <- predict(var.a, n.ahead = 15, ci = 0.95)
+plot(predictions, names = "gdp")
+
+predictions <- predict(var.a, n.ahead = 15, ci = 0.95)
+plot(predictions, names = "une")
+
+# Otro gráfico 
+fanchart(predictions, names = "gdp")
+fanchart(predictions, names = "une")
+```
+
+```{r}
+### Más en el futuro "n.ahead = 50" (perdemos precisión)
+predictions <- predict(var.a, n.ahead = 50, ci = 0.95)
+plot(predictions, names = "gdp")
+
+predictions <- predict(var.a, n.ahead = 50, ci = 0.95)
+plot(predictions, names = "une")
+
+# Otro gráfico 
+fanchart(predictions, names = "gdp")
+fanchart(predictions, names = "une")
+```
+
+```{r}
+### Tamaño de los intervalos de confianza
+diff_IC_gdp=predictions$fcst$gdp[,3]-predictions$fcst$gdp[,2]
+plot(diff_IC_gdp, main="Longitud de los IC vs cantidad de pronósticos a futuro - GDP", xlab='Cantidad de datos pronosticados en el futuro', ylab='Longitud del IC')
+
+diff_IC_une=predictions$fcst$gdp[,3]-predictions$fcst$une[,2]
+plot(diff_IC_une, main="Longitud de los IC vs cantidad de pronósticos a futuro - UNE", xlab='Cantidad de datos pronosticados en el futuro', ylab='Longitud del IC')
+
+
+```
+
+

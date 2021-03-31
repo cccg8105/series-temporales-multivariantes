@@ -1,0 +1,170 @@
+---
+title: "Datos macroeconómicos Filipinas"
+output: html_notebook
+author: "César Cárdenas"
+date: "29/3/2021"
+---
+
+
+### Librerias
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# install.packages("vars")
+# install.packages("MTS")
+# install.packages("tseries")
+# install.packages("ggfortify")
+library(readr)
+library(tseries)
+library(ggplot2)
+library(ggfortify)
+library(dplyr)
+library(vars)
+library(MTS) # diffM
+
+# Plot avanzado con separación visual entre lo real y lo pronosticado
+library(lattice)
+library(grid)
+library(zoo)
+```
+
+### Importación de datos
+
+```{r}
+mp = read_csv('https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/2.%20Casos%20de%20estudio%20en%20R/C.%20Datos%20macroecon%C3%B3micos%20de%20Filipinas/SampleVAR.csv')
+
+head(mp)
+```
+
+Creación de serie temporal
+
+```{r}
+# Convertir a objeto ts las dos series
+rgdp <- ts(mp$real_gdp_growth, start = c(1999,1), frequency = 4)
+psei <- ts(mp$psei, start = c(1999,1), frequency = 4)
+bsp <- ts(mp$bsp_rrp, start = c(1999,1), frequency = 4)
+unem <- ts(mp$unem, start = c(1999,1), frequency = 4)
+
+dat.mv <- cbind(rgdp, psei, bsp, unem)
+autoplot(dat.mv )
+```
+
+### Dividir en entrenamiento y prueba
+
+```{r}
+n_obs=10
+end=dim(dat.mv)[1]
+X_train = dat.mv [1:(end-n_obs),]
+X_test = dat.mv [(end-n_obs+1):end,]
+dim(X_test)
+
+```
+
+### Prueba de estacionariedad
+
+```{r}
+apply(X_train, 2, adf.test) #2 para especificar que lo queremos aplicar por columnas
+
+```
+Diferenciación
+
+```{r}
+stnry = diffM(X_train)
+
+# Volviendo a hacer el test:
+apply(stnry, 2, adf.test)
+```
+
+### Modelo
+
+```{r}
+VARselect(stnry, type = "none", lag.max = 10)
+
+
+# Creando el modelo
+var.a <- vars::VAR(stnry,
+                   
+                   lag.max = 10,
+                   ic = "AIC",
+                   type = "none")
+
+summary(var.a)
+```
+
+### Diagnosis del modelo
+
+```{r}
+mv.serial=serial.test(var.a)
+mv.serial
+plot(mv.serial, names = "rgdp")
+plot(mv.serial, names = "psei")
+plot(mv.serial, names = "bsp")
+plot(mv.serial, names = "unem")
+```
+
+### Predicción
+
+Predicción de datos transformados
+
+```{r}
+fcast = predict(var.a, n.ahead = 10)
+plot(fcast)
+```
+
+Volviendo a las variablres reales
+
+```{r}
+######### Forecast gold
+rgdp_pred = fcast$fcst[1]; rgdp_pred 
+
+
+# Extrayendo la columna de pronósticos
+x = rgdp_pred$rgdp[,1]; x
+
+######### Invirtiendo la diferenciación
+tail(X_train)
+
+x = cumsum(x) + X_train[nrow(X_train), 1]
+
+plot.ts(x)
+```
+
+
+Combinando datos reales y la predicción
+
+```{r}
+rgdpinv =ts(c(X_train[,1], x),
+            start = c(1999,1), frequency = 4)
+
+
+# Dibujando todo 
+plot(rgdpinv)
+plot.ts(rgdpinv[50:80])
+```
+
+Otro grafico
+
+```{r}
+# Objeto zoo
+xx = zoo(rgdpinv[50:80])
+
+# En el parámetro grid.clip ponemos la cantidad de observaciones que son reales dentro de las 
+# que hemos elegido. Hemos cogido 31 de las que 10 son pronósticos, así que grid.clip sería 21-1
+
+xyplot(xx, grid=TRUE, panel = function(xx, y, ...){
+  panel.xyplot(xx, y, col="red", ...)
+  grid.clip(unit(20, "native"), just=c("right")) # indica la separacion de colores 
+  panel.xyplot(xx, y, col="green", ...) })
+
+# Como vemos si nos vamos demasiado lejos en el futuro se aplana la predicción
+
+```
+
+### Evaluación del modelo
+
+```{r}
+### Evaluacion del modelo
+rmse=sqrt(mean((X_test[,1]-x)^2))
+rmse
+
+```
+

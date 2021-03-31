@@ -1,0 +1,15 @@
+---
+title: "Ejemplo1"
+author: "César Cárdenas"
+date: "27/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("googledrive")
+drive_find(type = 'folder', n_max = 30)
+drive_get("~/data_sets/") %>% drive_reveal("path")
+x <- drive_get("/datasets/blanchQua.csv")
+read.csv(x$drive_resource[[1]]$webViewLink) 
+```
