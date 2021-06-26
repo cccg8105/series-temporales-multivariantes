@@ -1,0 +1,452 @@
+---
+title: "Detección de Anomalias"
+author: "César Cárdenas"
+date: "1/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+```
+
+## Descripción
+
+## Librerias
+
+```{python}
+import numpy as np
+import pandas as pd
+import scipy.stats as stats
+import matplotlib.pyplot as plt
+import statsmodels.graphics.tsaplots as sgt 
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.vector_ar.var_model import VAR
+
+import warnings
+warnings.simplefilter('ignore')
+
+import os
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = 'C:/Users/cesar.cardenas/anaconda3/envs/env_rstudio/Library/plugins/platforms'
+```
+## Importación de datos
+
+Contador de peatones y bicicletas en ambos sentidos de una via por hora. Adicionalmente, hay una columna mas para el total.
+
+```{python}
+### Cargar los datos ###
+
+train_hours = 80*7*24  # weeks x hours x days
+test_hours = 15*7*24  # weeks x hours x days
+
+df = pd.read_csv('https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/3.%20Casos%20de%20estudio%20en%20Python/F.%20Detecci%C3%B3n%20de%20at%C3%ADpicos%20en%20series%20multivariantes/burke-gilman-trail-north-of-ne-70th-st-bike-and-ped-counter.csv', nrows=train_hours+test_hours, parse_dates=['Date'])
+
+print(df.shape)
+df.head()
+```
+
+Se limpian na's reemplazandolos por la mediana en la misma hora de los otros dias.
+
+```{python}
+### NANs ###
+print(df.isna().sum())
+
+df['Ped South'] = df['Ped South'].groupby(df.Date.dt.hour).transform(lambda x: x.fillna(x.median()))
+df['Ped North'] = df['Ped North'].groupby(df.Date.dt.hour).transform(lambda x: x.fillna(x.median()))
+df['Bike South'] = df['Bike South'].groupby(df.Date.dt.hour).transform(lambda x: x.fillna(x.median()))
+df['Bike North'] = df['Bike North'].groupby(df.Date.dt.hour).transform(lambda x: x.fillna(x.median()))
+df['BGT North of NE 70th Total'] = df['Ped South'] + df['Ped North'] + df['Bike South'] + df['Bike North']
+
+print(df.isna().sum())
+```
+
+### Adecuación de datos
+
+Se agrupon los datos por frecuencia diaria
+
+```{python}
+### AGREGACION DIARIA ###
+df['Date'] = pd.to_datetime(df['Date'].dt.date)
+df.head()
+```
+
+```{python}
+df_day = pd.DataFrame()
+df_day['Ped South'] = df.groupby(df.Date)['Ped South'].sum()
+df_day['Ped North'] = df.groupby(df.Date)['Ped North'].sum()
+df_day['Bike South'] = df.groupby(df.Date)['Bike South'].sum()
+df_day['Bike North'] = df.groupby(df.Date)['Bike North'].sum()
+df_day['Total'] = df.groupby(df.Date)['BGT North of NE 70th Total'].sum()
+
+df_day.index = pd.DatetimeIndex(df_day.index.values, freq=df_day.index.inferred_freq)
+df_day.head()
+```
+
+```{python}
+print(df_day.shape)
+```
+Gráfico de datos
+```{python}
+### PLOT DATOS DIARIOS ###
+
+df_day.plot(figsize=(16,6))
+plt.show()
+```
+
+## Dividir en datos de entrenamiento y prueba
+
+```{python}
+train = df_day[:(train_hours//24)].copy()
+train.shape
+```
+## Analisis de autocorrelación
+
+Se obtiene el grafico de autocorrelación para la columna total.
+
+```{python}
+### ACF ### 
+sgt.plot_acf(train['Total'], lags = 559, zero = False)
+plt.title("ACF", size = 24)
+plt.show()
+```
+
+Se revisa si la serie tiene estacionalidad
+
+```{python}
+plt.figure(figsize=(16,6))
+plt.title("ACF", size = 24)
+pd.plotting.autocorrelation_plot(train['Total']);
+plt.show()
+```
+Se presenta estacionalidad semanal y anual por lo que es necesario eliminarla
+
+### Obteniendo datos mensuales
+
+A cada dia se le resta la media mensual relativa para eliminar la estacionalidad.
+
+
+```{python}
+month_mean_train = train.groupby(train.index.month).mean()
+month_mean_train
+```
+
+```{python}
+
+### REMOVER 'LONG TERM SEASONALITY' (ESTACIONALIDAD ANUAL EN ESTE CASO) ###
+
+train['Ped South'] = train.apply(lambda x: x['Ped South'] - month_mean_train['Ped South'][x.name.month], axis=1)
+train['Ped North'] = train.apply(lambda x: x['Ped North'] - month_mean_train['Ped North'][x.name.month], axis=1)
+train['Bike South'] = train.apply(lambda x: x['Bike South'] - month_mean_train['Bike South'][x.name.month], axis=1)
+train['Bike North'] = train.apply(lambda x: x['Bike North'] - month_mean_train['Bike North'][x.name.month], axis=1)
+train['Total'] = train.apply(lambda x: x['Total'] - month_mean_train['Total'][x.name.month], axis=1)
+
+### ACF ###
+
+plt.figure(figsize=(16,6))
+plt.title("ACF", size = 24)
+pd.plotting.autocorrelation_plot(train['Total']);
+plt.show()
+```
+Nueva serie sin estacionalidad anual.
+
+## Detección de atípicos univariantes
+
+Se aplica entrenamiento sobre la variable total
+
+```{python}
+### TRAIN TEST SPLIT - CASO UNIVARIANTE ###
+train_uni = train['Total'].copy()
+test_uni = df_day['Total'][(train_hours//24):].copy()
+
+test_uni = test_uni - test_uni.index.month.map(month_mean_train['Total'])
+train.drop('Total', inplace=True, axis=1)
+```
+
+### Modelo
+
+```{python}
+### MODELO UNIVARIANTE ###
+
+AIC = {}
+best_aic, best_order = np.inf, 0
+
+for p in range(6,9):
+    for q in range(0,10):
+
+        mod = SARIMAX(train_uni, order=(p,0,q), enforce_invertibility=False)
+        try:
+            res = mod.fit(disp=False)
+            AIC[(p,0,q)] = res.aic
+        except:
+            AIC[(p,0,q)] = np.inf
+            
+        if AIC[(p,0,q)] < best_aic:
+            best_aic = AIC[(p,0,q)]
+            best_order = (p,0,q)
+            
+print('BEST ORDER', best_order, 'BEST AIC:', best_aic)
+```
+Se emplea el mejor modelo identificado para hacer una predicción
+
+```{python}
+### Ajuste y entrenamiento del mejor modelo ###
+
+mod = SARIMAX(train_uni, order=best_order, enforce_invertibility=False)
+res = mod.fit(disp=False)
+res.aic
+```
+Se analizan los residuos del modelo
+
+```{python}
+### Análisis de los residuos del modelo ###
+res.plot_diagnostics(figsize=(18,10))
+plt.show()
+```
+
+Se verifica que la diagnosis del modelo es correcta. Ahora es posible detectar anomalias.
+
+```{python}
+
+### Predicciones en los Datos de entrenamiento ###
+
+predict = res.get_prediction()
+predicted_mean = predict.predicted_mean + predict.predicted_mean.index.month.map(month_mean_train['Total'])
+train_uni = train_uni + train_uni.index.month.map(month_mean_train['Total'])
+
+# nivel de confianza 0.9
+predict_ci = predict.conf_int(alpha=0.1)
+
+predict_ci['lower Total'] = predict_ci.apply(lambda x: x['lower Total'] + month_mean_train['Total'][x.name.month], axis=1)
+predict_ci['upper Total'] = predict_ci.apply(lambda x: x['upper Total'] + month_mean_train['Total'][x.name.month], axis=1)
+
+residuals_mean = res.resid.mean()
+residuals_std = res.resid.std()
+
+### PLOT Predicciones en los Datos de entrenamiento con intervalos de confianza ###
+
+plt.figure(figsize=(15,6))
+
+plt.plot(train_uni, 'k.')
+plt.plot(predicted_mean, linestyle='--', linewidth=2, color='blue')
+plt.fill_between(predict_ci.index, predict_ci['lower Total'], predict_ci['upper Total'], alpha=0.8)
+plt.show()
+```
+
+Los puntos fuera del intervalo de confizan son los atipicos
+
+### Predicción de futuros atipicos
+
+```{python}
+### Predicciones iterativas en los Datos de Prueba (Test) ###
+
+point_forecast = res.get_prediction(end=mod.nobs)
+point_ci = point_forecast.conf_int(alpha=0.1)
+
+mean_pred = {point_forecast.predicted_mean.index[-1]: point_forecast.predicted_mean[-1]}
+upper_pred = {point_ci.index[-1]: point_ci['upper Total'][-1]}
+lower_pred = {point_ci.index[-1]: point_ci['lower Total'][-1]}
+
+for t,row in test_uni[:-1].iteritems():
+    
+    row = pd.Series(row, index=[t])
+    res = res.extend(row)
+    point_forecast = res.get_prediction(1)
+    point_ci = point_forecast.conf_int(alpha=0.1)
+    
+    mean_pred[point_forecast.predicted_mean.index[0]] = point_forecast.predicted_mean.values[0]
+    upper_pred[point_ci.index[0]] = point_ci['upper Total'][0]
+    lower_pred[point_ci.index[0]] = point_ci['lower Total'][0]
+    
+mean_pred = pd.Series(mean_pred)
+upper_pred = pd.Series(upper_pred)
+lower_pred = pd.Series(lower_pred)
+
+
+```
+
+```{python}
+### Análisis de los residuos en los Datos de Prueba (Test) ###
+
+alpha = 0.01
+upper = stats.norm.ppf(1 - alpha/2)
+lower = stats.norm.ppf(alpha/2)
+
+residuals_test = test_uni - residuals_mean
+# estandarizacion de los residuos
+residuals_test = (residuals_test - residuals_mean) / residuals_std
+
+plt.figure(figsize=(15,6))
+plt.plot(residuals_test)
+plt.ylabel('resid')
+plt.axhline(upper, c='red', linestyle='--')
+plt.axhline(lower, c='red', linestyle='--')
+```
+
+Determinando indices atipicos
+
+```{python}
+outliers_index=np.where((residuals_test<lower) | (residuals_test>upper) )[0]
+outliers_index
+```
+
+Revirtiendo escalado
+
+```{python}
+### Revirtiendo el escalado en los datos de prueba predichos iterativamente ###
+
+mean_pred = mean_pred + mean_pred.index.month.map(month_mean_train['Total'])
+upper_pred = upper_pred + upper_pred.index.month.map(month_mean_train['Total'])
+lower_pred = lower_pred + lower_pred.index.month.map(month_mean_train['Total'])
+test_uni = test_uni + test_uni.index.month.map(month_mean_train['Total'])
+```
+
+```{python}
+### PLOT Datos de prueba predichos ###
+
+plt.figure(figsize=(15,6))
+
+plt.plot(test_uni, 'k.')
+plt.plot(mean_pred, linestyle='--', linewidth=2, color='blue')
+plt.fill_between(mean_pred.index, lower_pred, upper_pred, alpha=0.6)
+plt.show()
+```
+
+Atipicos
+
+```{python}
+
+### ¿Cuáles son los atipicos? ###
+
+outliers_index=np.where((test_uni<lower_pred) | (test_uni>upper_pred) )[0]
+outliers_index
+```
+
+## Detección de atipicos multivariante
+
+### Modelo
+
+```{python}
+### Mejor modelo multivariante ###
+
+AIC = {}
+best_aic, best_order = np.inf, 0
+
+for i in range(1,50):
+    model = VAR(endog=train)
+    var_result = model.fit(maxlags=i)
+    AIC[i] = var_result.aic
+    
+    if AIC[i] < best_aic:
+        best_aic = AIC[i]
+        best_order = i
+        
+print('BEST ORDER', best_order, 'BEST AIC:', best_aic)
+```
+### Entrenamiento
+
+```{python}
+### Entrenamiento y ajuste ###
+
+var = VAR(endog=train)
+var_result = var.fit(maxlags=best_order)
+
+var_result.aic
+```
+
+### Prueba de T2 de Hotelling 
+
+```{python}
+### Estimar la T2 de Hotelling ###
+
+residuals_mean = var_result.resid.values.mean(axis=0)
+residuals_std = var_result.resid.values.std(axis=0)
+
+residuals = (var_result.resid.values - residuals_mean) / residuals_std
+cov_residuals = np.linalg.inv(np.cov(residuals.T))
+
+T = np.diag((residuals).dot(cov_residuals).dot(residuals.T))
+```
+
+```{python}
+### UCL (Upeer control limit) ###
+
+m = var_result.nobs # numero de observaciones del modelo
+p = var_result.resid.shape[-1] # cantidad de variables del modelo
+alpha = 0.01 # nivel de significacion
+
+UCL = stats.f.ppf(1-alpha, dfn=p, dfd=m-p) *(p*(m+1)*(m-1)/(m*m-m*p))
+UCL
+```
+
+Grafico de anomalias
+
+```{python}
+### PLOT del gráfico de control ###
+
+plt.figure(figsize=(16,6))
+plt.plot(train.index[best_order:], T)
+plt.ylabel('T-squared')
+plt.axhline(UCL, c='red', linestyle='--')
+plt.show()
+```
+
+```{python}
+### TEST SPLIT CASO MULTIVARIANTE ###
+
+test = df_day[(train_hours//24-best_order):].copy()
+test.drop('Total', inplace=True, axis=1)
+
+test.shape
+```
+
+```{python}
+### REMOVER ESTACIONALIDAD A LARGO PLAZO (ANUAL) DEL DATASET DE PRUEBA ###
+
+test['Ped South'] = test.apply(lambda x: x['Ped South'] - month_mean_train['Ped South'][x.name.month], axis=1)
+test['Ped North'] = test.apply(lambda x: x['Ped North'] - month_mean_train['Ped North'][x.name.month], axis=1)
+test['Bike South'] = test.apply(lambda x: x['Bike South'] - month_mean_train['Bike South'][x.name.month], axis=1)
+test['Bike North'] = test.apply(lambda x: x['Bike North'] - month_mean_train['Bike North'][x.name.month], axis=1)
+```
+
+```{python}
+### PREDICCIONES ITERATIVAS DATASET DE PRUEBA ###
+
+pred = []
+
+for i in range(best_order, len(test)):
+    
+    pred.append(var_result.forecast(test.iloc[i-best_order:i].values, steps=1))
+    
+pred = np.vstack(pred)
+pred.shape
+```
+
+```{python}
+### ESTADISTICO T2 PARA EL DATASET DE PRUEBA ###
+
+residuals_test = test.iloc[best_order:].values - pred
+residuals_test = (residuals_test - residuals_mean) / residuals_std
+
+T_test = np.diag((residuals_test).dot(cov_residuals).dot(residuals_test.T))
+
+### PLOT DATASET DE PRUEBA ###
+
+plt.figure(figsize=(16,6))
+plt.plot(test.iloc[best_order:].index, T_test)
+plt.ylabel('T-squared')
+plt.axhline(UCL, c='red', linestyle='--')
+plt.show()
+```
+
+se identifican los atipicos
+
+```{python}
+np.where(T_test>UCL)[0]
+```
+
+CONCLUSIONES
+Atípicos detectados por método univariante, residuos: 45, 47
+
+Atípicos detectados por método univariante, intervalo de confianza: 10, 45, 53, 54
+
+Atípicos detectados por método multivariante: 13, 14, 15, 30, 31, 32, 33, 34, 54

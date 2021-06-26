@@ -1,0 +1,101 @@
+---
+title: "Inferencia causal"
+author: "César Cárdenas"
+date: "1/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+use_condaenv("env_rstudio")
+# virtualenv_install("env_rstudio", "pycausalimpact")
+# py_install('pycausalimpact')
+# conda_install('pycausalimpact')
+
+```
+
+## Descripción
+
+## Librerias
+
+```{python}
+import os
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = 'C:/Users/cesar.cardenas/anaconda3/envs/env_rstudio/Library/plugins/platforms'
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from causalimpact import CausalImpact
+import warnings
+warnings.simplefilter('ignore')
+```
+
+## Importación de Datos
+
+```{python}
+df = pd.read_csv('https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/3.%20Casos%20de%20estudio%20en%20Python/G.%20Impacto%20de%20Juego%20de%20Tronos%20en%20el%20nombre%20de%20los%20beb%C3%A9s/data.csv')
+
+df.head(5)
+```
+
+Frecuencia de nombres Arya
+
+```{python}
+aryaF = df[(df.name=="Arya")&(df.gender=="F")]
+
+aryaF=aryaF[aryaF.year>=1996]
+aryaF.head(3)
+```
+
+Se obtienen frecuencia de otros nombres para hacer la comparacion 
+
+```{python}
+Jaclyn=df[(df.name=="Jaclyn")&(df.gender=="F")]
+Kristie=df[(df.name=="Kristie")&(df.gender=="F")]
+Kaley=df[(df.name=="Kaley")&(df.gender=="F")]
+Jodi=df[(df.name=="Jodi")&(df.gender=="F")]
+
+Jaclyn=Jaclyn[Jaclyn.year>=1996]
+Kristie=Kristie[Kristie.year>=1996]
+Kaley=Kaley[Kaley.year>=1996]
+Jodi=Jodi[Jodi.year>=1996]
+```
+
+```{python}
+len(aryaF["year"])
+
+aryaF.loc[:,"year"]=[str(aryaF["year"].values[i]) + '-01-01' for i in range(0,len(aryaF["year"]))]
+aryaF.head(2)
+```
+creacion del dataset
+```{python}
+data=pd.DataFrame(aryaF["count"].values, columns = ['Arya'],index=pd.to_datetime(aryaF.year,format='%Y-%m-%d'))
+data
+
+data['Jaclyn']=Jaclyn["count"].values
+data['Kristie']=Kristie["count"].values
+data['Kaley']=Kaley["count"].values
+data['Jodi']=Jodi["count"].values
+
+data.head(5)
+```
+## Analisis de causalidad
+
+Rango de periodos antes y despues del evento causal
+
+```{python}
+pre_period = ['19960101','20120101']
+post_period = ['20130101','20190101']
+```
+
+Causalidad
+
+```{python}
+ci = CausalImpact(data, pre_period, post_period)
+print(ci.summary())
+print(ci.summary(output='report'))
+ci.plot()
+```
+

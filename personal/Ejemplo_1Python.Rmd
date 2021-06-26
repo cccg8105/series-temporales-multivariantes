@@ -1,0 +1,378 @@
+---
+title: "Mercado de oro y plata"
+author: "César Cárdenas"
+date: "2/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+```
+
+## Librerias
+
+```{python}
+import os
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = 'C:/Users/cesar.cardenas/anaconda3/envs/env_rstudio/Library/plugins/platforms'
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import statsmodels.tsa.stattools as sts
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.stattools import grangercausalitytests
+import statsmodels.graphics.tsaplots as sgt
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+import warnings
+warnings.simplefilter('ignore')
+
+
+# !pip install yfinance
+# import yfinance
+```
+
+## Importación de Datos
+
+```{python}
+df_comp = pd.read_csv('https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/3.%20Casos%20de%20estudio%20en%20Python/A.%20Mercado%20del%20oro%20y%20la%20plata/Market2020.csv')
+
+df_comp.head(5)
+
+# Otra forma de obtener los datos
+
+# raw_data = yfinance.download (tickers = "GC=F, SI=F, EUR=X, CL=F, ^GSPC, ^TNX", start = "2005-01-07", 
+#                              end = "2020-06-03", interval = "1d", group_by = 'ticker', auto_adjust = True, # treads = True)
+# raw_data
+
+
+#  df_comp=raw_data.copy()
+#  df_comp['Gold'] = df_comp['GC=F'].Close[:]
+#  df_comp['Silver'] = df_comp['SI=F'].Close[:]
+#  df_comp['Oil'] = df_comp['CL=F'].Close[:]
+#  df_comp['Treasury'] = df_comp['^TNX'].Close[:]
+#  df_comp['SP500'] = df_comp['^GSPC'].Close[:]
+#  df_comp['USD/EUR'] = df_comp['EUR=X'].Close[:]
+
+
+# del df_comp['GC=F']
+# del df_comp['SI=F']
+# del df_comp['CL=F']
+# del df_comp['^TNX']
+# del df_comp['^GSPC']
+# del df_comp['EUR=X']
+
+```
+
+Formateo de datos y manejo de na's
+
+```{python}
+data=pd.DataFrame(df_comp["Gold"].values, columns = ['Gold'],index=pd.to_datetime(df_comp.Date,format='%Y-%m-%d'))
+data['Silver'] = df_comp['Silver'].values
+data['Oil'] = df_comp['Oil'].values
+data['Treasury'] = df_comp['Treasury'].values
+data['SP500'] = df_comp['SP500'].values
+data['USD/EUR'] = df_comp['USD/EUR'].values
+
+data.isnull().sum()
+data=data.asfreq('b')
+data=data.fillna(method='ffill')
+data.isnull().sum()
+
+df_comp = data.copy()
+```
+
+## Analisis exploratorio
+
+```{python}
+# Plots
+
+fig, axes = plt.subplots(nrows=3, ncols=2, dpi=120, figsize=(8,6))
+for i, ax in enumerate(axes.flatten()):
+ data = df_comp[df_comp.columns[i]]
+ ax.plot(data, color='red', linewidth=1)
+ ax.set_title(df_comp.columns[i])
+ ax.xaxis.set_ticks_position('none')
+ ax.yaxis.set_ticks_position('none')
+ ax.spines['top'].set_alpha(0)
+ ax.tick_params(labelsize=6)
+ plt.tight_layout();
+plt.show()
+```
+
+Matriz de correlación
+
+```{python}
+corr=df_comp.corr()
+corr
+
+sns.heatmap(corr, xticklabels=corr.columns.values, yticklabels=corr.columns.values, annot=True,vmax=1, vmin=-1, cmap =sns.diverging_palette(220, 10, as_cmap=True),center=0 )
+plt.show()
+```
+
+Dividir los datos en entrenamiento y prueba
+
+```{python}
+n_obs=15
+X_train, X_test = df_comp[0:-n_obs], df_comp[-n_obs:]
+print(X_train.shape, X_test.shape)
+
+```
+
+Prueba de estacionariedad
+
+```{python}
+def augmented_dickey_fuller_statistics(time_series):
+  result = sts.adfuller(time_series.values)
+  if result[1] > 0.05:
+    print('p-value: %f - Serie no estacionaria' % result[1])
+  else:
+    print('p-value: %f - Serie estacionaria' % result[1])
+
+print('Test de Dickey-Fuller Aumentado:')
+print('Serie de tiempo Precio del Oro')
+augmented_dickey_fuller_statistics(X_train['Gold'])
+print('Serie de tiempo Precio de la Plata')
+augmented_dickey_fuller_statistics(X_train['Silver'])
+print('Serie de tiempo Precio del Petróleo')
+augmented_dickey_fuller_statistics(X_train['Oil'])
+print('Serie de tiempo Índice del rendimiento de bonos del tesoro en 10 años')
+augmented_dickey_fuller_statistics(X_train['Treasury'])
+print('Serie de tiempo Índice SP500')
+augmented_dickey_fuller_statistics(X_train['SP500'])
+print('Serie de tiempo Cambio USD/EUR')
+augmented_dickey_fuller_statistics(X_train['USD/EUR'])
+```
+Debido a que las series no son estacionarias es necesario transformarlas
+
+## Transformación de datos
+
+```{python}
+
+X_train_transformed=X_train.diff().dropna()
+X_train_transformed.head()
+
+# Dibujemos los datos transformados
+fig, axes = plt.subplots(nrows=3, ncols=2, dpi=120, figsize=(8,6))
+
+for i, ax in enumerate(axes.flatten()):
+  d = X_train_transformed[X_train_transformed.columns[i]]
+  ax.plot(d, color='red', linewidth=1)
+  ax.set_title(df_comp.columns[i])
+  ax.xaxis.set_ticks_position('none')
+  ax.yaxis.set_ticks_position('none')
+  ax.spines['top'].set_alpha(0)
+  ax.tick_params(labelsize=6)
+  plt.tight_layout();
+plt.show()
+```
+Revisión de estacionariedad
+
+```{python}
+print('Test de Dickey-Fuller Aumentado:')
+print('Serie de tiempo Precio del Oro Diferenciada')
+augmented_dickey_fuller_statistics(X_train_transformed['Gold'])
+print('Serie de tiempo Precio de la Plata Diferenciada')
+augmented_dickey_fuller_statistics(X_train_transformed['Silver'])
+print('Serie de tiempo Precio del Petróleo Diferenciada')
+augmented_dickey_fuller_statistics(X_train_transformed['Oil'])
+print('Serie de tiempo Índice del rendimiento de bonos del tesoro en 10 años Diferenciada')
+augmented_dickey_fuller_statistics(X_train_transformed['Treasury'])
+print('Serie de tiempo Índice SP500 Diferenciada')
+augmented_dickey_fuller_statistics(X_train_transformed['SP500'])
+print('Serie de tiempo Cambio USD/EUR Diferenciada')
+augmented_dickey_fuller_statistics(X_train_transformed['USD/EUR'])
+```
+
+## Modelo VAR
+
+```{python}
+model = VAR(X_train_transformed)
+modelsel=model.select_order(15)
+modelsel.summary()
+```
+
+Ajuste del modelo
+
+```{python}
+res = model.fit(maxlags=15, ic='aic')
+res.summary()
+```
+
+## Causalidad de Granger
+
+### Oro
+
+```{python}
+
+grangercaus=res.test_causality(['Silver', 'Oil', 'Treasury','SP500','USD/EUR'],['Gold'],kind='f')
+print(grangercaus.summary())
+```
+Se rechaza la hipotesis nula porque el P valor es menor a 0.05, por lo tanto si existe causalidad
+
+### PLata
+
+```{python}
+grangercaus=res.test_causality(['Gold', 'Oil', 'Treasury','SP500','USD/EUR'],['Silver'],kind='f')
+print(grangercaus.summary())
+```
+
+### Oil
+
+```{python}
+grangercaus=res.test_causality(['Gold','Silver','Treasury','SP500','USD/EUR'],['Oil'],kind='f')
+print(grangercaus.summary())
+```
+
+### Treasury
+
+```{python}
+grangercaus=res.test_causality(['Gold','Silver','Oil','SP500','USD/EUR'],['Treasury'],kind='f')
+print(grangercaus.summary())
+```
+
+### SP500
+
+```{python}
+grangercaus=res.test_causality(['Gold','Silver','Oil','Treasury','USD/EUR'],['SP500'],kind='f')
+print(grangercaus.summary())
+```
+
+### USD/EUR
+
+```{python}
+grangercaus=res.test_causality(['Gold','Silver','Oil','Treasury','SP500'],['USD/EUR'],kind='f')
+print(grangercaus.summary())
+```
+
+Matriz de cusalidad de Granger
+
+```{python}
+from statsmodels.tsa.stattools import grangercausalitytests
+maxlag=15
+test = 'ssr_chi2test'
+def grangers_causality_matrix(X_train_transformed, variables, test = 'ssr_chi2test', verbose=False):
+  dataset = pd.DataFrame(np.zeros((len(variables), len(variables))), columns=variables, index=variables)
+  for c in dataset.columns:
+    for r in dataset.index:
+      test_result = grangercausalitytests(X_train_transformed[[r,c]], maxlag=maxlag, verbose=False)
+      p_values = [round(test_result[i+1][0][test][1],4) for i in range(maxlag)]
+      if verbose: 
+        print(f'Y = {r}, X = {c}, P Values = {p_values}')
+      min_p_value = np.min(p_values)
+      dataset.loc[r,c] = min_p_value
+  dataset.columns = [var + '_x' for var in variables]
+  dataset.index = [var + '_y' for var in variables]
+  return dataset
+grangers_causality_matrix(X_train_transformed, variables = X_train_transformed.columns)
+```
+Obtiene la matriz de P valores de la causalidad entre variables.
+
+## Diagnosis del modelo
+
+Se verifica que los residuos se comporten como ruido blanco
+
+```{python}
+residuals=res.resid
+
+fig, axs = plt.subplots(6)
+fig.suptitle('Gráficos de los residuos',fontsize=20)
+fig.set_size_inches(18, 10)
+[axs[i].plot(residuals.iloc[:,i]) for i in range(6)]
+plt.show()
+```
+Dickey - Fuller a los residuos
+
+```{python}
+print('Gold Silver Oil Treas. SP500 USD/EUR')
+[sts.adfuller(residuals.iloc[:,i])[1] for i in range(6)]
+```
+
+Autocorrelacion de los residuos
+
+```{python}
+# [sgt.plot_acf(residuals.iloc[:,i], zero = False, lags = 40) for i in range(6)]
+
+for i in range(6):
+  sgt.plot_acf(residuals.iloc[:,i], zero = False, lags = 40)
+  plt.show()
+```
+
+Conclusión: Los residuos del modelo no presentan estructura de autocorrelación, son estacionarios según los resultados de la prueba de Dickey - Fuller aumentada y en los gráficos se puede comprobar esto visualmente, entonces puede concluirse que son ruido blanco como es deseable.
+
+## Predecir el futuro
+
+```{python}
+y_fitted = res.fittedvalues
+fig, axs = plt.subplots(6)
+fig.suptitle('Gráficos de los valores predichos por el modelo',fontsize=20)
+fig.set_size_inches(18, 10)
+[axs[i].plot(y_fitted.iloc[:,i]) for i in range(6)]
+plt.show()
+```
+
+Hallando los pronosticos
+
+```{python}
+lag_order = res.k_ar
+print('Orden del modelo:', lag_order)
+# Input data para hacer forecasting (pronósticos a futuro)
+input_data = X_train_transformed.values[-lag_order:]
+# Forecasting
+pred = res.forecast(y=input_data, steps=n_obs)
+pred = (pd.DataFrame(pred, index=X_test.index, columns=X_test.columns + '_pred'))
+print('Predicciones:')
+pred
+```
+
+```{python}
+import matplotlib.pyplot as plt
+plt.figure(figsize = (12, 10))
+res.plot_forecast(15)
+plt.tight_layout(h_pad = 1.15)
+plt.show()
+```
+
+Invirtiendo la transformación del modelo
+
+```{python}
+def invert_transformation(X_train, pred):
+  forecast = pred.copy()
+  columns = X_train.columns
+  for col in columns:
+    forecast[str(col)+'_pred'] = X_train[col].iloc[-1] + forecast[str(col)+'_pred'].cumsum()
+  return forecast
+
+output = invert_transformation(X_train, pred)
+output
+```
+### Pronostico del oro
+
+```{python}
+plt.figure(figsize = (9,7))
+plt.plot(output.iloc[:,0])
+plt.title('Gold Forecast')
+plt.grid()
+plt.show()
+```
+
+comparación con datos de prueba
+
+```{python}
+combine = pd.concat([output['Gold_pred'], X_test['Gold']], axis=1)
+combine = combine.round(decimals=2)
+combine = combine.reset_index()
+combine = combine.sort_values(by='Date', ascending=False)
+
+combine
+```
+
+Evaluación del modelo
+
+```{python}
+print('Mean absolute error:', mean_absolute_error(combine['Gold'].values, combine['Gold_pred'].values))
+print('Root mean squared error:', np.sqrt(mean_squared_error(combine['Gold'].values, combine['Gold_pred'].values)))
+```
+

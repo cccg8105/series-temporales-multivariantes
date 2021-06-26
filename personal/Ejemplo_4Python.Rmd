@@ -1,0 +1,497 @@
+---
+title: "Sensores de gas"
+author: "César Cárdenas"
+date: "8/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(reticulate)
+use_condaenv("env_rstudio")
+```
+
+## Descripción
+
+## Librerias
+
+```{python}
+import os
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = 'C:/Users/cesar.cardenas/anaconda3/envs/env_rstudio/Library/plugins/platforms'
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
+import statsmodels.tsa.stattools as sts
+from statsmodels.tsa.api import VAR
+from statsmodels.tsa.stattools import grangercausalitytests
+import statsmodels.graphics.tsaplots as sgt
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+import warnings
+warnings.simplefilter('ignore')
+```
+
+## Importación de datos
+
+```{python}
+df_comp = pd.read_csv('https://raw.githubusercontent.com/cccg8105/series-temporales-multivariantes/master/3.%20Casos%20de%20estudio%20en%20Python/D.%20Sensores/Sensores.csv')
+df_comp.head()
+```
+
+```{python}
+df_comp = df_comp.drop(['Time'], axis = 1)
+df_comp.head()
+```
+
+```{python}
+df_comp.isnull().sum()
+```
+
+## Analisis exploratorio
+
+```{python}
+sns.set_style('darkgrid')
+df_comp.plot(kind = 'line', legend = 'reverse', title = 'Visualizando la Serie Temporal de Sensores')
+plt.legend(loc = 'upper right', shadow = True, bbox_to_anchor = (1.35, 0.8))
+plt.show()
+```
+
+Las variables Temperatura y Humedad Relativa no cambian con el tiempo, no van a aportar nada, vamos a eliminarlas.
+
+```{python}
+# Eliminando Temperature & Relative Humidity 
+df_comp.drop(['Temperature','Rel_Humidity'], axis = 1, inplace = True)
+df_comp.head()
+```
+```{python}
+
+# Visualizando de nuevo
+sns.set_style('darkgrid')
+df_comp.plot(kind = 'line', legend = 'reverse', title = 'Visualizando la Serie Temporal de Sensores')
+plt.legend(loc = 'upper right', shadow = True, bbox_to_anchor = (1.35, 0.8))
+plt.show()
+```
+
+Matriz de correlación
+
+```{python}
+corr=df_comp.corr()
+corr
+```
+
+```{python}
+sns.heatmap(corr, xticklabels=corr.columns.values, yticklabels=corr.columns.values, annot=True,vmax=1, vmin=-1, cmap =sns.diverging_palette(220, 10, as_cmap=True),center=0 )
+plt.show()
+```
+
+## Dividir datos en entrenamiento y prueba
+
+```{python}
+n_obs=100
+X_train, X_test = df_comp[0:-n_obs], df_comp[-n_obs:]
+print(X_train.shape, X_test.shape)
+```
+
+## Prueba de estacionariedad
+
+```{python}
+def augmented_dickey_fuller_statistics(time_series):
+  result = sts.adfuller(time_series.values)
+  print('p-value: %f' % result[1])
+
+print('Test de Dickey-Fuller Aumentado:')
+for i in range(8):
+  print('Serie de tiempo Sensor', 'S',i+1)
+  augmented_dickey_fuller_statistics(X_train.iloc[:,i])
+
+```
+Todos los p-valores son mayores que 0.05, con lo cual no se rechaza la hipótesis nula de que la serie no es estacionaria. Habría que transformar los datos porque no se puede confirmar estacionariedad.
+
+## Transformación de datos
+
+```{python}
+X_train_transformed=X_train.diff().dropna()
+X_train_transformed.head()
+```
+
+```{python}
+sns.set_style('darkgrid')
+X_train_transformed.plot(kind = 'line', legend = 'reverse', title = 'Visualizando la Serie Temporal de Sensores Diferenciada')
+plt.legend(loc = 'upper right', shadow = True, bbox_to_anchor = (1.35, 0.8))
+plt.show()
+```
+
+Nueva prueba de estacionariedad
+
+```{python}
+print('Test de Dickey-Fuller Aumentado 2da vez:')
+for i in range(8):
+  print('Serie de tiempo transformada Sensor', 'S',i+1)
+  augmented_dickey_fuller_statistics(X_train_transformed.iloc[:,i])
+  
+
+```
+
+S3, S5, S6 y S8 aún no son estacionarias
+
+```{python}
+#Diferenciando por segunda vez
+X_train_transformed=X_train_transformed.diff().dropna()
+X_train_transformed.head()
+```
+
+Nueva prueba de estacionariedad
+
+```{python}
+print('Test de Dickey-Fuller Aumentado 3ra vez:')
+for i in range(8):
+  print('Serie de tiempo transformada Sensor', 'S',i+1)
+  augmented_dickey_fuller_statistics(X_train_transformed.iloc[:,i])
+
+```
+
+Todos los p-valores son < 0.05 por lo tanto se podría concluir que con un solo orden de diferenciación se obtienen series estacionarias.
+
+## Modelo VAR
+
+```{python}
+model = VAR(X_train_transformed)
+
+modelsel=model.select_order(15)
+print(modelsel.summary())
+```
+
+ajuste del modelo
+
+```{python}
+res = model.fit(maxlags=15, ic='aic')
+res.summary()
+```
+
+### Causalidad de Granger
+
+#### S1
+
+```{python}
+grangercaus=res.test_causality(['S2','S3','S4','S5','S6','S7','S8'],['S1'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S2
+
+```{python}
+grangercaus=res.test_causality(['S1','S3','S4','S5','S6','S7','S8'],['S2'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S3
+
+```{python}
+grangercaus=res.test_causality(['S2','S1','S4','S5','S6','S7','S8'],['S3'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S4
+
+```{python}
+grangercaus=res.test_causality(['S2','S3','S1','S5','S6','S7','S8'],['S4'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S5
+
+```{python}
+grangercaus=res.test_causality(['S2','S3','S4','S1','S6','S7','S8'],['S5'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S6
+
+```{python}
+grangercaus=res.test_causality(['S2','S3','S4','S5','S1','S7','S8'],['S6'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S7
+
+```{python}
+grangercaus=res.test_causality(['S2','S3','S4','S5','S6','S1','S8'],['S7'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S8
+
+```{python}
+grangercaus=res.test_causality(['S2','S3','S4','S5','S6','S7','S1'],['S8'],kind='f')
+print(grangercaus.summary())
+```
+
+Conclusión: Sensores que no son causa: S1, S2, S3, S4
+
+Matriz de causalidad de Granger
+
+```{python}
+maxlag=15
+test = 'ssr_chi2test'
+def grangers_causality_matrix(X_train_transformed, variables, test = 'ssr_chi2test', verbose=False):
+  dataset = pd.DataFrame(np.zeros((len(variables), len(variables))), columns=variables, index=variables)
+  for c in dataset.columns:
+    for r in dataset.index:
+      test_result = grangercausalitytests(X_train_transformed[[r,c]], maxlag=maxlag, verbose=False)
+      p_values = [round(test_result[i+1][0][test][1],4) for i in range(maxlag)]
+      if verbose: 
+        print(f'Y = {r}, X = {c}, P Values = {p_values}')
+      min_p_value = np.min(p_values)
+      dataset.loc[r,c] = min_p_value
+  dataset.columns = [var + '_x' for var in variables]
+  dataset.index = [var + '_y' for var in variables]
+  return dataset
+grangers_causality_matrix(X_train_transformed, variables = X_train_transformed.columns)
+```
+
+## Diagnosis del modelo
+
+```{python}
+residuals=res.resid
+
+fig, axs = plt.subplots(8)
+fig.suptitle('Gráficos de los residuos',fontsize=20)
+fig.set_size_inches(18, 10)
+[axs[i].plot(residuals.iloc[:,i]) for i in range(8)]
+plt.show()
+```
+
+Prueba de estacionariedad de residuos
+
+```{python}
+print('ADF de los Residuos, p-valores:')
+[sts.adfuller(residuals.iloc[:,i])[1] for i in range(8)]
+```
+
+Todos los p-valores son < 0.05 por tanto se rechaza la hipótesis nula de que las 6 series de residuos no son estacionarias, por lo cual con un 95% de confianza se cree que son estacionarias.
+
+Autocorrelación de residuos
+
+```{python}
+# [sgt.plot_acf(residuals.iloc[:,i], zero = False, lags = 40) for i in range(8)]
+
+for i in range(8):
+  sgt.plot_acf(residuals.iloc[:,i], zero = False, lags = 40)
+  plt.show()
+
+```
+
+Conclusión: Los residuos del modelo no presentan estructura de autocorrelación, son estacionarios según los resultados de la prueba de Dickey - Fuller aumentada y en los gráficos se puede comprobar esto visualmente, entonces puede concluirse que son ruido blanco como es deseable.
+
+## Predicción
+
+```{python}
+
+y_fitted = res.fittedvalues
+fig, axs = plt.subplots(8)
+fig.suptitle('Gráficos de los valores predichos por el modelo',fontsize=20)
+fig.set_size_inches(18, 10)
+[axs[i].plot(y_fitted.iloc[:,i]) for i in range(8)]
+plt.show()
+```
+
+hallando valores futuros
+
+```{python}
+# Obtener el orden del modelo
+lag_order = res.k_ar
+print('Orden del modelo:', lag_order)
+# Input data para hacer forecasting (pronósticos a futuro)
+input_data = X_train_transformed.values[-lag_order:]
+# Forecasting
+pred = res.forecast(y=input_data, steps=n_obs)
+pred = (pd.DataFrame(pred, index=X_test.index, columns=X_test.columns + '_pred'))
+print('Predicciones:')
+pred
+```
+
+```{python}
+plt.figure(figsize = (12, 10))
+res.plot_forecast(lag_order)
+plt.tight_layout(h_pad = 1.15)
+plt.show()
+```
+
+Transformar los datos a valores iniciales
+
+```{python}
+def invert_transformation(ds, df_forecast, second_diff=False):
+  for col in ds.columns:
+    # Undo the 2nd Differencing
+    if second_diff:
+      df_forecast[str(col)] = (ds[col].iloc[-1] - ds[col].iloc[-2]) + df_forecast[str(col)].cumsum()
+      # Undo the 1st Differencing
+      df_forecast[str(col)] = ds[col].iloc[-1] + df_forecast[str(col)].cumsum()
+  return df_forecast
+
+pred.columns=X_test.columns
+output = invert_transformation(X_train, pred, second_diff=True)
+output
+```
+
+Comparar resultados con datos de prueba
+
+```{python}
+fig, axes = plt.subplots(nrows = int(len(X_train.columns)/2), ncols = 2, dpi = 100, figsize = (10,10))
+
+for i, (col,ax) in enumerate(zip(X_train.columns, axes.flatten())):
+  output[col].plot(color = '#F4511E', legend = True, ax = ax).autoscale(axis =' x',tight = True)
+  X_test[col].plot(color = '#3949AB', legend = True, ax = ax)
+  
+  ax.set_title('Sensor: ' + col + ' - Actual vs Forecast')
+  ax.xaxis.set_ticks_position('none')
+  ax.yaxis.set_ticks_position('none')
+  
+  ax.spines["top"].set_alpha(0)
+  ax.tick_params(labelsize = 6)
+
+plt.tight_layout()
+plt.savefig('actual_forecast.png')
+plt.show()
+```
+
+Evaluación del modelo
+
+```{python}
+print('Mean absolute error:', mean_absolute_error(X_test, output))
+print('Root mean squared error:', np.sqrt(mean_squared_error(X_test, output)))
+```
+## Eliminando columnas S1, S2, S3 y S4
+
+```{python}
+X_train_transformed_new=X_train_transformed.drop(['S1','S2','S3','S4'],axis=1)
+X_train_transformed_new.head()
+```
+
+### Modelo VAR
+
+```{python}
+model_new = VAR(X_train_transformed_new)
+modelsel_new=model_new.select_order(15)
+print(modelsel_new.summary())
+```
+
+Ajustando del modelo
+
+```{python}
+res_new = model_new.fit(maxlags=15, ic='aic')
+print(res_new.summary())
+```
+
+### Causalidad de Granger
+
+#### S5
+
+```{python}
+grangercaus=res_new.test_causality(['S6','S7','S8'],['S5'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S6
+
+```{python}
+grangercaus=res_new.test_causality(['S5','S7','S8'],['S6'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S7
+
+```{python}
+grangercaus=res_new.test_causality(['S5','S6','S8'],['S7'],kind='f')
+print(grangercaus.summary())
+```
+
+#### S8
+
+```{python}
+grangercaus=res_new.test_causality(['S5','S6','S7'],['S8'],kind='f')
+print(grangercaus.summary())
+```
+
+Conclusión: Sensores que no son causa: S5
+
+Matriz de causalidad
+
+```{python}
+maxlag=15
+test = 'ssr_chi2test'
+def grangers_causality_matrix(X_train_transformed, variables, test = 'ssr_chi2test', verbose=False):
+  dataset = pd.DataFrame(np.zeros((len(variables), len(variables))), columns=variables, index=variables)
+  for c in dataset.columns:
+    for r in dataset.index:
+      test_result = grangercausalitytests(X_train_transformed[[r,c]], maxlag=maxlag, verbose=False)
+      p_values = [round(test_result[i+1][0][test][1],4) for i in range(maxlag)]
+      if verbose: 
+        print(f'Y = {r}, X = {c}, P Values = {p_values}')
+      min_p_value = np.min(p_values)
+      dataset.loc[r,c] = min_p_value
+  dataset.columns = [var + '_x' for var in variables]
+  dataset.index = [var + '_y' for var in variables]
+  return dataset
+grangers_causality_matrix(X_train_transformed_new, variables = X_train_transformed_new.columns)
+```
+
+### Pronostico
+
+```{python}
+X_test_new=X_test.drop(['S1','S2','S3','S4'],axis=1)
+X_test_new.head()
+
+# Obtener el orden del modelo
+lag_order = res_new.k_ar
+print('Orden del modelo:', lag_order)
+# Input data para hacer forecasting (pronósticos a futuro)
+input_data = X_train_transformed_new.values[-lag_order:]
+# Forecasting
+pred_new = res_new.forecast(y=input_data, steps=n_obs)
+pred_new = (pd.DataFrame(pred_new, index=X_test_new.index, columns=X_test_new.columns + '_pred'))
+print('Predicciones:')
+pred_new
+```
+
+Invertir transformación
+
+```{python}
+X_train_new=X_train.drop(['S1','S2','S3','S4'],axis=1)
+
+pred_new.columns=X_test_new.columns
+output = invert_transformation(X_train_new, pred_new, second_diff=True)
+output
+```
+
+```{python}
+fig, axes = plt.subplots(nrows = int(len(X_train_new.columns)/2), ncols = 2, dpi = 100, figsize = (10,10))
+
+for i, (col,ax) in enumerate(zip(X_train_new.columns, axes.flatten())):
+    output[col].plot(color = '#F4511E', legend = True, ax = ax).autoscale(axis =' x',tight = True)
+    X_test_new[col].plot(color = '#3949AB', legend = True, ax = ax)
+
+    ax.set_title('Sensor: ' + col + ' - Actual vs Forecast')
+    ax.xaxis.set_ticks_position('none')
+    ax.yaxis.set_ticks_position('none')
+
+    ax.spines["top"].set_alpha(0)
+    ax.tick_params(labelsize = 6)
+
+plt.tight_layout()
+plt.savefig('actual_forecast.png')
+plt.show()
+```
+
+### Evaluación del modelo
+
+```{python}
+print('Mean absolute error:', mean_absolute_error(X_test_new, output))
+print('Root mean squared error:', np.sqrt(mean_squared_error(X_test_new, output)))
+```
+Métricas anteriores:
+Mean absolute error: 4.5370024238929725
+Root mean squared error: 6.689114236330293
+Conclusión: No siempre eliminar de golpe varias variables es la mejor solución.
